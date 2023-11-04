@@ -1,8 +1,8 @@
-[![Go Doc](https://pkg.go.dev/badge/github.com/gford1000-go/channel.svg)](https://pkg.go.dev/github.com/gford1000-go/channel)
-[![Go Report Card](https://goreportcard.com/badge/github.com/gford1000-go/channel)](https://goreportcard.com/report/github.com/gford1000-go/channel)
+[![Go Doc](https://pkg.go.dev/badge/github.com/gford1000-go/chant.svg)](https://pkg.go.dev/github.com/gford1000-go/chant)
+[![Go Report Card](https://goreportcard.com/badge/github.com/gford1000-go/chant)](https://goreportcard.com/report/github.com/gford1000-go/chant)
 
-channel
-=======
+chant
+=====
 
 Simplified chan behaviour, in particular helping manage behaviour on attempts
 to send or receive after the chan has closed.
