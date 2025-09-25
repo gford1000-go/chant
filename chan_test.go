@@ -122,7 +122,7 @@ func TestBufferedChan(t *testing.T) {
 
 func TestBufferedChan2(t *testing.T) {
 
-	c := New[int](WithTimeout(1*time.Millisecond), WithSize(10))
+	c := New[int](WithRecvTimeout(1*time.Millisecond), WithSize(10))
 	defer c.Close()
 
 	var wg sync.WaitGroup

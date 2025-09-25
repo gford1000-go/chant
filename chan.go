@@ -23,7 +23,7 @@ func New[T any](opts ...func(*Options)) *Channel[T] {
 	}
 	return &Channel[T]{
 		c: ch,
-		d: o.Timeout,
+		d: o.RecvTimeout,
 	}
 }
 
