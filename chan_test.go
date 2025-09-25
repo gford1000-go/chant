@@ -78,7 +78,7 @@ func TestRawOnClosedChannel(t *testing.T) {
 
 func TestBufferedChan(t *testing.T) {
 
-	c := New[int](10)
+	c := New[int](WithSize(10))
 	defer c.Close()
 
 	exit := New[bool]()
@@ -122,7 +122,7 @@ func TestBufferedChan(t *testing.T) {
 
 func TestBufferedChan2(t *testing.T) {
 
-	c := NewWithTimeout[int](1*time.Millisecond, 10)
+	c := New[int](WithTimeout(1*time.Millisecond), WithSize(10))
 	defer c.Close()
 
 	var wg sync.WaitGroup
@@ -190,7 +190,7 @@ func BenchmarkNew(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		c1 := New[*msg](1)
+		c1 := New[*msg](WithSize(1))
 		go func() {
 			defer c1.Close()
 			msg, err := c1.Recv()

@@ -6,27 +6,24 @@ import (
 	"time"
 )
 
-// NewWithTimeout creates a wrapped chan of the given type, with or without buffering
-// and with the specified Timeout for listening on the chan
-func NewWithTimeout[T any](d time.Duration, size ...int) *Channel[T] {
-	return newChannel[T](d, size...)
-}
-
 // New creates a wrapped chan of the given type, with or without buffering
-func New[T any](size ...int) *Channel[T] {
-	return newChannel[T](0, size...)
-}
+// and with the specified Timeout for listening on the chan
+func New[T any](opts ...func(*Options)) *Channel[T] {
 
-func newChannel[T any](d time.Duration, size ...int) *Channel[T] {
+	o := Options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	var ch chan T
-	if len(size) == 0 {
+	if o.Size == 0 {
 		ch = make(chan T)
 	} else {
-		ch = make(chan T, size[0])
+		ch = make(chan T, o.Size)
 	}
 	return &Channel[T]{
 		c: ch,
-		d: d,
+		d: o.Timeout,
 	}
 }
 
