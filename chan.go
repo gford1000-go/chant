@@ -83,10 +83,13 @@ func (c *Channel[T]) Recv() (T, error) {
 		return <-c.c, nil
 	}
 
+	timer := acquireTimer(c.d)
+	defer releaseTimer(timer)
+
 	select {
 	case v := <-c.c:
 		return v, nil
-	case <-time.After(c.d):
+	case <-timer.C:
 		return t, ErrChannelTimeout
 	}
 }
