@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -13,12 +14,15 @@ import (
 func New[T any](ctx context.Context, opts ...func(*Options)) *Channel[T] {
 
 	o := Options{
-		SendRetries: 3,
-		SendTimeout: 100 * time.Microsecond,
+		SendRetries:       3,
+		SendTimeout:       100 * time.Microsecond,
+		ReceiverDoneChans: []chan struct{}{},
 	}
 	for _, opt := range opts {
 		opt(&o)
 	}
+
+	receiversDeclared := len(o.ReceiverDoneChans) > 0
 
 	var ch chan T
 	if o.Size == 0 {
@@ -27,22 +31,26 @@ func New[T any](ctx context.Context, opts ...func(*Options)) *Channel[T] {
 		ch = make(chan T, o.Size)
 	}
 	return &Channel[T]{
-		c:       ch,
-		d:       o.RecvTimeout,
-		retries: o.SendRetries,
-		rd:      o.SendTimeout,
-		ctx:     ctx,
+		c:                 ch,
+		d:                 o.RecvTimeout,
+		retries:           o.SendRetries,
+		rd:                o.SendTimeout,
+		ctx:               ctx,
+		checkForReceivers: receiversDeclared,
+		receivers:         o.ReceiverDoneChans,
 	}
 }
 
 // Channel implements a wrapped chan
 type Channel[T any] struct {
-	l       sync.RWMutex
-	c       chan T
-	d       time.Duration
-	retries int
-	rd      time.Duration
-	ctx     context.Context
+	l                 sync.RWMutex
+	c                 chan T
+	d                 time.Duration
+	retries           int
+	rd                time.Duration
+	ctx               context.Context
+	checkForReceivers bool
+	receivers         []chan struct{}
 }
 
 // Close releases the underlying channel resources
@@ -72,6 +80,9 @@ var ErrUncaughtSendPanic = errors.New("recovered panic during send")
 // ErrContextCompleted returned if the request is being attempted but the context has completed
 var ErrContextCompleted = errors.New("context is completed")
 
+// ErrNoReceiversForRequest returned if no receiver chan struct{} remain unclosed
+var ErrNoReceiversForRequest = errors.New("all receivers have left")
+
 // Send will publish the specified value onto the underlying chan,
 // unless it is already closed, when an error will be returned.
 func (c *Channel[T]) Send(ctx context.Context, t T) (err error) {
@@ -86,6 +97,45 @@ func (c *Channel[T]) Send(ctx context.Context, t T) (err error) {
 
 	if c.c == nil {
 		return ErrChannelClosed
+	}
+
+	// Here we are allowing receivers to have notification chans, which
+	// they close as they stop listening.
+	// Once all receivers have stopped listening, there is no point
+	// adding messages to the Channel.
+	if c.checkForReceivers {
+		var chosen int
+		for chosen < len(c.receivers) {
+			// Create select cases for all done channels
+			cases := make([]reflect.SelectCase, 0, len(c.receivers)+1)
+
+			for _, receiverDoneChan := range c.receivers {
+				cases = append(cases, reflect.SelectCase{
+					Dir:  reflect.SelectRecv,
+					Chan: reflect.ValueOf(receiverDoneChan),
+				})
+			}
+
+			// Add a default case to make this non-blocking
+			cases = append(cases, reflect.SelectCase{
+				Dir: reflect.SelectDefault,
+			})
+
+			// Check to any done channels are ready
+			chosen, _, _ = reflect.Select(cases)
+
+			// If any of the chans have been closed, then one will be chosen, so
+			// remove that chan and try again, proceeding only once they have
+			// all been closed (and hence default is triggered)
+			if chosen < len(c.receivers) {
+				c.receivers = append(c.receivers[:chosen], c.receivers[chosen+1:]...)
+				chosen = 0
+			}
+		}
+
+		if len(c.receivers) == 0 {
+			return ErrNoReceiversForRequest
+		}
 	}
 
 	retry := true

@@ -190,6 +190,51 @@ func ExampleNew() {
 	// Output: true
 }
 
+func ExampleNew_withDoneChan() {
+
+	ctx := context.Background()
+
+	receiver1DoneChan := make(chan struct{})
+	receiver2DoneChan := make(chan struct{})
+
+	c1 := New[int](ctx, WithReceiverDoneChans(receiver1DoneChan, receiver2DoneChan))
+	defer c1.Close()
+
+	c2 := New[bool](ctx)
+	defer c2.Close()
+
+	v := 42
+
+	// Each goroutine processes a single message and then exits,
+	// signalling by closing their specific "done" chan
+	receiverProcessing := func(done chan struct{}) {
+		defer close(done)
+
+		i, err := c1.Recv(ctx)
+		c2.Send(ctx, err == nil && i == v)
+	}
+
+	go receiverProcessing(receiver1DoneChan)
+	go receiverProcessing(receiver2DoneChan)
+
+	// Will have 2 messages sent ok, then error on 3rd
+	for range 3 {
+		err := c1.Send(ctx, v)
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			answer, _ := c2.Recv(ctx)
+			fmt.Println(answer)
+		}
+		<-time.After(10 * time.Millisecond)
+	}
+
+	// Output:
+	// true
+	// true
+	// all receivers have left
+}
+
 func BenchmarkNew(b *testing.B) {
 
 	ctx := context.Background()

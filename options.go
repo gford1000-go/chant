@@ -4,10 +4,11 @@ import "time"
 
 // Options allows the behaviour of Channel to be modified
 type Options struct {
-	RecvTimeout time.Duration
-	Size        int
-	SendRetries int
-	SendTimeout time.Duration
+	RecvTimeout       time.Duration
+	Size              int
+	SendRetries       int
+	SendTimeout       time.Duration
+	ReceiverDoneChans []chan struct{}
 }
 
 // WithRecvTimeout sets the Recv timeout
@@ -48,5 +49,16 @@ func WithSendTimeout(d time.Duration) func(*Options) {
 		if d > o.SendTimeout {
 			o.SendTimeout = d
 		}
+	}
+}
+
+// WithReceiverDoneChans allows receivers (listeners) on the Channel to provide a
+// chan struct{} that they close when they stop listening.
+// This allows publishers to the Channel to know immediately whether their
+// request will be processed or not.
+// Default: no check is conducted unless at least one chan struct{} is provided
+func WithReceiverDoneChans(doneChans ...chan struct{}) func(*Options) {
+	return func(o *Options) {
+		o.ReceiverDoneChans = doneChans
 	}
 }
