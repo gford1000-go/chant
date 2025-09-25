@@ -1,6 +1,7 @@
 package chant
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,21 +11,23 @@ import (
 
 func TestNewChannel(t *testing.T) {
 
-	c1 := New[int]()
+	ctx := context.Background()
+
+	c1 := New[int](ctx)
 	defer c1.Close()
 
-	c2 := New[bool]()
+	c2 := New[bool](ctx)
 	defer c2.Close()
 
 	for i := 0; i < 10000; i++ {
 
 		go func(n int) {
-			i, _ := c1.Recv()
-			c2.Send(i == n)
+			i, _ := c1.Recv(ctx)
+			c2.Send(ctx, i == n)
 		}(i)
 
-		c1.Send(i)
-		res, err := c2.Recv()
+		c1.Send(ctx, i)
+		res, err := c2.Recv(ctx)
 
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -37,10 +40,12 @@ func TestNewChannel(t *testing.T) {
 
 func TestSendOnClosedChannel(t *testing.T) {
 
-	c := New[int]()
+	ctx := context.Background()
+
+	c := New[int](ctx)
 	c.Close()
 
-	err := c.Send(9)
+	err := c.Send(ctx, 9)
 	if err == nil {
 		t.Fatal("should have received error")
 	}
@@ -52,10 +57,12 @@ func TestSendOnClosedChannel(t *testing.T) {
 
 func TestRecvOnClosedChannel(t *testing.T) {
 
-	c := New[int]()
+	ctx := context.Background()
+
+	c := New[int](ctx)
 	c.Close()
 
-	_, err := c.Recv()
+	_, err := c.Recv(ctx)
 	if err == nil {
 		t.Fatal("should have received error")
 	}
@@ -67,7 +74,7 @@ func TestRecvOnClosedChannel(t *testing.T) {
 
 func TestRawOnClosedChannel(t *testing.T) {
 
-	c := New[int]()
+	c := New[int](context.Background())
 	c.Close()
 
 	ch := c.RawChan()
@@ -78,13 +85,15 @@ func TestRawOnClosedChannel(t *testing.T) {
 
 func TestBufferedChan(t *testing.T) {
 
-	c := New[int](WithSize(10))
+	ctx := context.Background()
+
+	c := New[int](ctx, WithSize(10))
 	defer c.Close()
 
-	exit := New[bool]()
+	exit := New[bool](ctx)
 	defer exit.Close()
 
-	exited := New[bool]()
+	exited := New[bool](ctx)
 	defer exited.Close()
 
 	total := 0
@@ -96,7 +105,7 @@ func TestBufferedChan(t *testing.T) {
 				total += i
 			case <-exit.RawChan():
 				{
-					exited.Send(true)
+					exited.Send(ctx, true)
 					return
 				}
 			}
@@ -106,13 +115,13 @@ func TestBufferedChan(t *testing.T) {
 	N := 1000
 
 	for i := 0; i < N; i++ {
-		c.Send(i)
+		c.Send(ctx, i)
 	}
 
 	time.Sleep(1 * time.Millisecond)
 
-	exit.Send(true)
-	exited.Recv()
+	exit.Send(ctx, true)
+	exited.Recv(ctx)
 
 	NTot := N * (N - 1) / 2
 	if total != NTot {
@@ -122,7 +131,9 @@ func TestBufferedChan(t *testing.T) {
 
 func TestBufferedChan2(t *testing.T) {
 
-	c := New[int](WithRecvTimeout(1*time.Millisecond), WithSize(10))
+	ctx := context.Background()
+
+	c := New[int](ctx, WithRecvTimeout(1*time.Millisecond), WithSize(10))
 	defer c.Close()
 
 	var wg sync.WaitGroup
@@ -133,7 +144,7 @@ func TestBufferedChan2(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for {
-			i, err := c.Recv()
+			i, err := c.Recv(ctx)
 			if err != nil {
 				return
 			}
@@ -144,7 +155,7 @@ func TestBufferedChan2(t *testing.T) {
 	N := 1000
 
 	for i := 0; i < N; i++ {
-		c.Send(i)
+		c.Send(ctx, i)
 	}
 
 	wg.Wait()
@@ -157,27 +168,31 @@ func TestBufferedChan2(t *testing.T) {
 
 func ExampleNew() {
 
-	c1 := New[int]()
+	ctx := context.Background()
+
+	c1 := New[int](ctx)
 	defer c1.Close()
 
-	c2 := New[bool]()
+	c2 := New[bool](ctx)
 	defer c2.Close()
 
 	v := 42
 
 	go func() {
-		i, err := c1.Recv()
-		c2.Send(err == nil && i == v)
+		i, err := c1.Recv(ctx)
+		c2.Send(ctx, err == nil && i == v)
 	}()
 
-	c1.Send(v)
+	c1.Send(ctx, v)
 
-	answer, _ := c2.Recv()
+	answer, _ := c2.Recv(ctx)
 	fmt.Println(answer)
 	// Output: true
 }
 
 func BenchmarkNew(b *testing.B) {
+
+	ctx := context.Background()
 
 	type msg struct {
 		v  int
@@ -190,20 +205,20 @@ func BenchmarkNew(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		c1 := New[*msg](WithSize(1))
+		c1 := New[*msg](ctx, WithSize(1))
 		go func() {
 			defer c1.Close()
-			msg, err := c1.Recv()
-			msg.ch.Send(err == nil && msg.v == v)
+			msg, err := c1.Recv(ctx)
+			msg.ch.Send(ctx, err == nil && msg.v == v)
 		}()
 
 		m := &msg{
 			v:  v,
-			ch: New[bool](),
+			ch: New[bool](ctx),
 		}
-		c1.Send(m)
+		c1.Send(ctx, m)
 
-		answer, err := m.ch.Recv()
+		answer, err := m.ch.Recv(ctx)
 		m.ch.Close()
 		if err != nil {
 			b.Fatal(err)

@@ -1,6 +1,7 @@
 package chant
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,7 +10,7 @@ import (
 
 // New creates a wrapped chan of the given type, with or without buffering
 // and with the specified Timeout for listening on the chan
-func New[T any](opts ...func(*Options)) *Channel[T] {
+func New[T any](ctx context.Context, opts ...func(*Options)) *Channel[T] {
 
 	o := Options{
 		SendRetries: 3,
@@ -30,6 +31,7 @@ func New[T any](opts ...func(*Options)) *Channel[T] {
 		d:       o.RecvTimeout,
 		retries: o.SendRetries,
 		rd:      o.SendTimeout,
+		ctx:     ctx,
 	}
 }
 
@@ -40,6 +42,7 @@ type Channel[T any] struct {
 	d       time.Duration
 	retries int
 	rd      time.Duration
+	ctx     context.Context
 }
 
 // Close releases the underlying channel resources
@@ -66,9 +69,12 @@ var ErrUnableToSendRequest = errors.New("unable to send request")
 // ErrUncaughtSendPanic returned if a send attempt generates a panic
 var ErrUncaughtSendPanic = errors.New("recovered panic during send")
 
+// ErrContextCompleted returned if the request is being attempted but the context has completed
+var ErrContextCompleted = errors.New("context is completed")
+
 // Send will publish the specified value onto the underlying chan,
 // unless it is already closed, when an error will be returned.
-func (c *Channel[T]) Send(t T) (err error) {
+func (c *Channel[T]) Send(ctx context.Context, t T) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%w: %v", ErrUncaughtSendPanic, r)
@@ -90,6 +96,10 @@ func (c *Channel[T]) Send(t T) (err error) {
 		submitTimer := acquireTimer(c.rd)
 
 		select {
+		case <-c.ctx.Done():
+			err = ErrContextCompleted
+		case <-ctx.Done():
+			err = ErrContextCompleted
 		case c.c <- t:
 			retry = false // only put the req onto the c.c once
 		case <-submitTimer.C:
@@ -121,7 +131,7 @@ func (c *Channel[T]) Send(t T) (err error) {
 // is already closed, when a error will be returned.  If the instance
 // includes a timeout for Recv, then that is applied and an error
 // raised should the timeout be reached before a value is returned.
-func (c *Channel[T]) Recv() (T, error) {
+func (c *Channel[T]) Recv(ctx context.Context) (T, error) {
 	c.l.RLock()
 	defer c.l.RUnlock()
 
@@ -131,7 +141,14 @@ func (c *Channel[T]) Recv() (T, error) {
 	}
 
 	if c.d == 0 {
-		return <-c.c, nil
+		select {
+		case v := <-c.c:
+			return v, nil
+		case <-c.ctx.Done():
+			return t, ErrContextCompleted
+		case <-ctx.Done():
+			return t, ErrContextCompleted
+		}
 	}
 
 	timer := acquireTimer(c.d)
@@ -140,6 +157,10 @@ func (c *Channel[T]) Recv() (T, error) {
 	select {
 	case v := <-c.c:
 		return v, nil
+	case <-c.ctx.Done():
+		return t, ErrContextCompleted
+	case <-ctx.Done():
+		return t, ErrContextCompleted
 	case <-timer.C:
 		return t, ErrChannelTimeout
 	}
