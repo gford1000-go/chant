@@ -2,6 +2,7 @@ package chant
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -10,7 +11,10 @@ import (
 // and with the specified Timeout for listening on the chan
 func New[T any](opts ...func(*Options)) *Channel[T] {
 
-	o := Options{}
+	o := Options{
+		SendRetries: 3,
+		SendTimeout: 100 * time.Microsecond,
+	}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -22,16 +26,20 @@ func New[T any](opts ...func(*Options)) *Channel[T] {
 		ch = make(chan T, o.Size)
 	}
 	return &Channel[T]{
-		c: ch,
-		d: o.RecvTimeout,
+		c:       ch,
+		d:       o.RecvTimeout,
+		retries: o.SendRetries,
+		rd:      o.SendTimeout,
 	}
 }
 
 // Channel implements a wrapped chan
 type Channel[T any] struct {
-	l sync.RWMutex
-	c chan T
-	d time.Duration
+	l       sync.RWMutex
+	c       chan T
+	d       time.Duration
+	retries int
+	rd      time.Duration
 }
 
 // Close releases the underlying channel resources
@@ -52,9 +60,21 @@ var ErrChannelClosed = errors.New("chan is closed")
 // ErrChannelTimeout raised when Recv times out
 var ErrChannelTimeout = errors.New("chan timed out")
 
+// ErrUnableToSendRequest returned when a request cannot be sent after multiple attempts
+var ErrUnableToSendRequest = errors.New("unable to send request")
+
+// ErrUncaughtSendPanic returned if a send attempt generates a panic
+var ErrUncaughtSendPanic = errors.New("recovered panic during send")
+
 // Send will publish the specified value onto the underlying chan,
 // unless it is already closed, when an error will be returned.
-func (c *Channel[T]) Send(t T) error {
+func (c *Channel[T]) Send(t T) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v", ErrUncaughtSendPanic, r)
+		}
+	}()
+
 	c.l.RLock()
 	defer c.l.RUnlock()
 
@@ -62,7 +82,38 @@ func (c *Channel[T]) Send(t T) error {
 		return ErrChannelClosed
 	}
 
-	c.c <- t
+	retry := true
+	attempts := 0
+	maxAttempts := c.retries
+	for retry {
+		var err error
+		submitTimer := acquireTimer(c.rd)
+
+		select {
+		case c.c <- t:
+			retry = false // only put the req onto the c.c once
+		case <-submitTimer.C:
+			// There is a possibility that a large number of concurrent Send() calls
+			// could fill up c.c before it can be closed.
+			// This could mean that a Send() could block indefinitely trying to write to c.c
+			// even though the Responder has closed.
+			// Retrying should detect done has closed, and so return an error
+			//
+			// The Send() might also be blocked trying to write to c.c
+			// if the receiver is taking too long to process.
+			attempts++
+			if attempts >= maxAttempts {
+				err = ErrUnableToSendRequest
+			}
+		}
+
+		releaseTimer(submitTimer)
+
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
