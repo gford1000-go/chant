@@ -176,3 +176,40 @@ func ExampleNew() {
 	fmt.Println(answer)
 	// Output: true
 }
+
+func BenchmarkNew(b *testing.B) {
+
+	type msg struct {
+		v  int
+		ch *Channel[bool]
+	}
+
+	v := 42
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for b.Loop() {
+		c1 := New[*msg](1)
+		go func() {
+			defer c1.Close()
+			msg, err := c1.Recv()
+			msg.ch.Send(err == nil && msg.v == v)
+		}()
+
+		m := &msg{
+			v:  v,
+			ch: New[bool](),
+		}
+		c1.Send(m)
+
+		answer, err := m.ch.Recv()
+		m.ch.Close()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if answer != true {
+			b.Fatal("transmission error")
+		}
+	}
+}
